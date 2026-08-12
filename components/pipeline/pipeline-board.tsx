@@ -89,19 +89,24 @@ export function PipelineBoard({
     null
   );
   // After a move, the card re-renders in another column (React re-parents the
-  // DOM node), so focus is restored explicitly: "card:<id>" or "select:<id>".
-  const [focusTarget, setFocusTarget] = useState<string | null>(null);
+  // DOM node), so focus is restored explicitly: { kind: "card" | "select", id }.
+  // Every move requests a FRESH object, so the effect re-runs on each move even
+  // when the same card is moved twice in a row — no setState inside the effect
+  // body, and no reset-then-set race.
+  const [focusTarget, setFocusTarget] = useState<{
+    kind: "card" | "select";
+    id: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!focusTarget) return;
-    const [kind, id] = focusTarget.split(":", 2);
-    const element = id
-      ? document.getElementById(
-          kind === "select" ? `stage-select-${id}` : `pipeline-card-${id}`
-        )
-      : null;
-    element?.focus();
-    setFocusTarget(null);
+    document
+      .getElementById(
+        focusTarget.kind === "select"
+          ? `stage-select-${focusTarget.id}`
+          : `pipeline-card-${focusTarget.id}`
+      )
+      ?.focus();
   }, [focusTarget]);
 
   /** The one move path: optimistic -> service -> rollback on failure. */
@@ -115,7 +120,7 @@ export function PipelineBoard({
     setBusy(true);
     setError(null);
     setPendingConfirm(null);
-    setFocusTarget(`card:${prospectId}`);
+    setFocusTarget({ kind: "card", id: prospectId });
 
     const result = await moveCard(
       columns,
@@ -160,8 +165,6 @@ export function PipelineBoard({
     const target = nextReachableStage(stage, event.key === "ArrowLeft" ? "prev" : "next");
     if (target) requestMove(prospectId, target);
   }
-
-  const total = PIPELINE_STAGES.reduce((sum, stage) => sum + columns[stage].length, 0);
 
   return (
     <div className="flex flex-col gap-4">

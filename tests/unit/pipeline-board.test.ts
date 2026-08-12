@@ -14,7 +14,6 @@ import {
   nextReachableStage,
   reachableTargets,
   removeCardFromColumns,
-  type PipelineColumns,
   type StageMoveFn,
 } from "@/lib/pipeline/board";
 import { PIPELINE_STAGES, type PipelineStage } from "@/domain/pipeline/types";
