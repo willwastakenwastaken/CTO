@@ -47,7 +47,9 @@ npm run dev
 
 ## Database migration & RLS
 
-- SQL migrations live in `migrations/` (none yet in this milestone).
+- SQL migrations live in `migrations/` — see `migrations/README.md` for how to
+  apply. `001_initial_schema.sql` creates the schema, `002_rls_policies.sql`
+  enables RLS (apply both via the Supabase SQL Editor, in order).
 - Every user-owned table enables RLS via `auth.uid()`; users may only
   select/insert/update/delete rows they own, and related ownership is verified
   (knowing another user's UUID must not allow attaching records to theirs).
