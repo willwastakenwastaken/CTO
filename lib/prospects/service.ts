@@ -16,6 +16,7 @@ import { applyStageTransition } from "@/domain/pipeline/rules";
 import { humanizeStage } from "@/domain/utils/format";
 import { isUuid, uuidFromParts } from "@/domain/utils/uuid";
 import { compactList, textOrNull } from "@/lib/sales-profile/schema";
+import type { SalesProfileRow } from "@/lib/sales-profile/types";
 import { parseIdealCustomer } from "@/lib/prospects/ideal-customer";
 import type { ProspectStore } from "@/lib/prospects/store";
 import type { ActivityRow, ProspectNoteRow, ProspectRow } from "@/lib/prospects/types";
@@ -28,6 +29,14 @@ import {
   type ProspectFormValues,
 } from "@/lib/prospects/schema";
 import { prospectDisplayName } from "@/lib/prospects/query";
+import { buildCallStrategy } from "@/domain/call-strategy/build";
+import type {
+  CallStrategyProfileInput,
+  CallStrategyProspectInput,
+  CallStrategyResult,
+} from "@/domain/call-strategy/types";
+import { createConversationState, toJson } from "@/domain/conversation-state/state";
+import type { CallSessionRow } from "@/lib/calls/types";
 
 export interface ProspectServiceOptions {
   store: ProspectStore;
@@ -91,6 +100,38 @@ function toProspectPatch(values: ProspectFormValues): ProspectPatch {
     next_action_due_date: textOrNull(values.next_action_due_date),
     tags: compactList(values.tags),
     source: textOrNull(values.source),
+  };
+}
+
+/** SalesProfileRow -> the builder's profile input (lists default to []). */
+function toStrategyProfile(row: SalesProfileRow): CallStrategyProfileInput {
+  return {
+    name: row.name,
+    product_name: row.product_name,
+    description: row.description,
+    benefits: row.benefits,
+    problems_solved: row.problems_solved,
+    differentiators: row.differentiators,
+    ideal_customer: row.ideal_customer,
+    call_goal: row.call_goal,
+    preferred_cta: row.preferred_cta,
+    objections: row.objections ?? [],
+    guardrails: row.guardrails ?? [],
+  };
+}
+
+/** ProspectRow -> the builder's prospect input (blank stays unknown). */
+function toStrategyProspect(row: ProspectRow): CallStrategyProspectInput {
+  return {
+    first_name: row.first_name,
+    last_name: row.last_name,
+    title: row.title,
+    company: row.company,
+    industry: row.industry,
+    size: row.size,
+    location: row.location,
+    tags: row.tags ?? [],
+    source: row.source,
   };
 }
 
@@ -377,6 +418,71 @@ export function createProspectService({ store, userId }: ProspectServiceOptions)
       spec: Parameters<ProspectStore["listProspects"]>[1]
     ): Promise<ProspectRow[]> {
       return store.listProspects(userId, spec);
+    },
+
+    /**
+     * Builds the deterministic pre-call brief for the Command Center from
+     * STORED data only: the ownership-guarded prospect + the user's default
+     * Sales Profile. When no profile exists the domain builder returns the
+     * onboarding-required state (the UI links to /settings/sales-profile).
+     */
+    async getCallStrategy(prospectId: string): Promise<CallStrategyResult> {
+      const prospect = await loadProspect(prospectId);
+      const profile = await store.getDefaultSalesProfile(userId);
+      return buildCallStrategy({
+        profile: profile ? toStrategyProfile(profile) : null,
+        prospect: toStrategyProspect(prospect),
+      });
+    },
+
+    /**
+     * Start AI-Assisted Call: ownership-checked creation of ONE prepared,
+     * prospect-linked simulated practice call (mode 'practice', scenario
+     * 'abc_roofing', is_simulated true, status 'prepared'). Links the user's
+     * default Sales Profile when one exists; objective = the profile's call
+     * goal (null when no profile/goal — never invented); timing stays null.
+     * The button then navigates to /calls/[callId]/live, which starts it.
+     */
+    async startAiAssistedCall(
+      prospectId: string,
+      nowMs: number = Date.now()
+    ): Promise<{ callId: string }> {
+      await loadProspect(prospectId); // ownership guard (NOT_FOUND)
+      const profile = await store.getDefaultSalesProfile(userId);
+      const callId = randomUUID();
+      const row: CallSessionRow = {
+        id: callId,
+        user_id: userId,
+        prospect_id: prospectId,
+        sales_profile_id: profile?.id ?? null,
+        mode: "practice",
+        scenario: "abc_roofing",
+        is_simulated: true,
+        status: "prepared",
+        objective: textOrNull(profile?.call_goal ?? null),
+        timing: null,
+        started_at: null,
+        duration_seconds: null,
+        outcome: null,
+        opportunity_fit_score: null,
+        opportunity_fit_label: null,
+        opportunity_fit_explanation: null,
+        purchase_intent_score: null,
+        purchase_intent_label: null,
+        purchase_intent_explanation: null,
+        evidence: [],
+        summary: null,
+        next_action: null,
+        pipeline_recommendation: null,
+        pipeline_recommendation_reason: null,
+        conversation_state: toJson(createConversationState()),
+        review_payload: null,
+        error: null,
+        created_at: iso(nowMs),
+        updated_at: iso(nowMs),
+      };
+      await store.insertCallSession(row);
+      return { callId };
     },
   };
 }

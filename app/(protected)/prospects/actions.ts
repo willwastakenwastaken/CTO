@@ -148,3 +148,19 @@ export async function addNoteAction(
     return mapError(error);
   }
 }
+
+/**
+ * Start AI-Assisted Call — ownership-checked; creates ONE prepared,
+ * prospect-linked simulated practice call (default Sales Profile linked when
+ * one exists) and returns its id so the client routes to /calls/[callId]/live.
+ */
+export async function startAiAssistedCallAction(
+  prospectId: string
+): Promise<ActionResult<{ callId: string }>> {
+  try {
+    const service = await getService();
+    return { ok: true, data: await service.startAiAssistedCall(prospectId) };
+  } catch (error) {
+    return mapError(error);
+  }
+}

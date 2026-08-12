@@ -15,12 +15,16 @@ import type {
 } from "@/lib/prospects/types";
 import { ProspectServiceError } from "@/lib/prospects/types";
 import type { ProspectListSpec } from "@/lib/prospects/query";
+import type { SalesProfileRow } from "@/lib/sales-profile/types";
+import type { CallSessionRow } from "@/lib/calls/types";
 
 class FakeProspectStore implements ProspectStore {
   prospects = new Map<string, ProspectRow>();
   notes: ProspectNoteRow[] = [];
   activities: ActivityRow[] = [];
   idealCustomerText: string | null = null;
+  defaultSalesProfile: SalesProfileRow | null = null;
+  callSessions: CallSessionRow[] = [];
   writeLog: string[] = [];
 
   /** Reads a column off a prospect row (name-safe for the fake's sort). */
@@ -87,6 +91,13 @@ class FakeProspectStore implements ProspectStore {
   }
   async getIdealCustomerText() {
     return this.idealCustomerText;
+  }
+  async getDefaultSalesProfile() {
+    return this.defaultSalesProfile;
+  }
+  async insertCallSession(row: CallSessionRow) {
+    this.writeLog.push("insertCallSession");
+    this.callSessions.push(row);
   }
 }
 

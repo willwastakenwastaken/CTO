@@ -5,6 +5,8 @@
 // insert (prospect_created), so re-running the one-shot flow cannot duplicate.
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { PersistenceError } from "@/lib/calls/types";
+import type { CallSessionRow } from "@/lib/calls/types";
+import type { SalesProfileRow } from "@/lib/sales-profile/types";
 import type {
   ActivityRow,
   ProspectNoteRow,
@@ -28,6 +30,11 @@ export interface ProspectStore {
   upsertActivity(row: ActivityRow): Promise<void>;
   /** The default Sales Profile's ideal_customer text (for Opportunity Fit). */
   getIdealCustomerText(userId: string): Promise<string | null>;
+  /** The user's default Sales Profile row, or null (drives Call Strategy +
+   * the Start AI-Assisted Call wiring). */
+  getDefaultSalesProfile(userId: string): Promise<SalesProfileRow | null>;
+  /** Inserts a prepared call_sessions row created from the Command Center. */
+  insertCallSession(row: CallSessionRow): Promise<void>;
 }
 
 export function createSupabaseProspectStore(supabase: SupabaseClient): ProspectStore {
@@ -128,6 +135,22 @@ export function createSupabaseProspectStore(supabase: SupabaseClient): ProspectS
         .maybeSingle();
       if (error) fail(`load sales profile for ${userId}`, error);
       return (data as { ideal_customer: string | null } | null)?.ideal_customer ?? null;
+    },
+
+    async getDefaultSalesProfile(userId) {
+      const { data, error } = await supabase
+        .from("sales_profiles")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("is_default", true)
+        .maybeSingle();
+      if (error) fail(`load sales profile for ${userId}`, error);
+      return (data as SalesProfileRow | null) ?? null;
+    },
+
+    async insertCallSession(row) {
+      const { error } = await supabase.from("call_sessions").insert(row);
+      if (error) fail(`create call session ${row.id}`, error);
     },
   };
 }

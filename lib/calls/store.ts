@@ -72,11 +72,16 @@ export function createSupabaseCallStore(supabase: SupabaseClient): CallStore {
       if (!prospectId) return null;
       const { data, error } = await supabase
         .from("prospects")
-        .select("name, company")
+        .select("first_name, last_name, company")
         .eq("id", prospectId)
         .maybeSingle();
       if (error) fail(`load prospect ${prospectId}`, error);
-      return (data as ProspectIdentity | null) ?? null;
+      const row = data as
+        | { first_name: string | null; last_name: string | null; company: string | null }
+        | null;
+      if (!row) return null;
+      const name = [row.first_name, row.last_name].filter(Boolean).join(" ").trim();
+      return { name: name || null, company: row.company };
     },
 
     async getProspectRecord(prospectId) {
