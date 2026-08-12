@@ -2,9 +2,29 @@
 // HARD RULE: IDs are UUID strings everywhere. NEVER Number(id), parseInt(id),
 // or timestamps/indexes as record identity. These helpers exist so every
 // boundary validates UUIDs and no code path can silently coerce an id.
+import { createHash } from "node:crypto";
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Deterministic UUID v4-shaped string derived from the given parts (SHA-256,
+ * hex-sliced into 8-4-4-4-12 with the version/variant nibbles set). Same
+ * inputs -> same UUID, every runtime. Used by the simulation engine so that
+ * replaying an advance regenerates the SAME segment/event/suggestion ids:
+ * idempotent upserts (onConflict: "id") then make a replay a no-op instead of
+ * duplicating rows. IDs are still plain UUID strings — never numeric.
+ */
+export function uuidFromParts(...parts: string[]): string {
+  const hex = createHash("sha256").update(parts.join("::")).digest("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    `4${hex.slice(13, 16)}`,
+    `8${hex.slice(17, 20)}`,
+    hex.slice(20, 32),
+  ].join("-");
+}
 
 /** True when `value` is a canonical UUID string. */
 export function isUuid(value: unknown): value is string {
