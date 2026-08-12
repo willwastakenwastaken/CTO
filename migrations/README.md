@@ -6,8 +6,9 @@ Plain SQL migrations for SignalDesk Phase 1, applied in order:
 | -------------------------- | -------------------------------------------------------------------------------------------------- |
 | `001_initial_schema.sql`   | Enum types, all ten tables, CHECK constraints, indexes, shared `updated_at` trigger + triggers     |
 | `002_rls_policies.sql`     | Enables RLS on all ten tables, creates ownership policies, least-privilege role grants             |
+| `003_ai_suggestions_superseded_by.sql` | Adds `ai_suggestions.superseded_by` (uuid FK, on delete set null) + index so superseded suggestions are marked without deleting history |
 
-Both files wrap their statements in a single `begin; ... commit;` transaction.
+All files wrap their statements in a single `begin; ... commit;` transaction.
 
 ## How to apply
 
