@@ -24,6 +24,8 @@ export interface ProspectIdentity {
 
 export interface CallStore {
   getSession(callId: string): Promise<CallSessionRow | null>;
+  /** All of a user's call sessions, newest first (created_at desc). */
+  listSessions(userId: string): Promise<CallSessionRow[]>;
   /** Prospect display identity for a call header; null when not linked. */
   getProspect(prospectId: string | null): Promise<ProspectIdentity | null>;
   /** Full prospect row (identity + stage) for review/apply; null when missing. */
@@ -66,6 +68,16 @@ export function createSupabaseCallStore(supabase: SupabaseClient): CallStore {
         .maybeSingle();
       if (error) fail(`load call session ${callId}`, error);
       return (data as CallSessionRow | null) ?? null;
+    },
+
+    async listSessions(userId) {
+      const { data, error } = await supabase
+        .from("call_sessions")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false });
+      if (error) fail(`list call sessions for ${userId}`, error);
+      return (data as CallSessionRow[] | null) ?? [];
     },
 
     async getProspect(prospectId) {

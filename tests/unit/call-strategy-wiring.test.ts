@@ -97,6 +97,9 @@ class FakeCallStore implements CallStore {
   async getSession() {
     return this.session;
   }
+  async listSessions() {
+    return this.session ? [this.session] : [];
+  }
   async listSegments() {
     return [];
   }

@@ -33,6 +33,9 @@ class FakeStore implements CallStore {
   async getSession(callId: string) {
     return this.sessions.get(callId) ?? null;
   }
+  async listSessions() {
+    return [...this.sessions.values()];
+  }
   async getProspect(prospectId: string | null) {
     if (!prospectId) return null;
     return { name: "Linked Prospect", company: "Linked Co" };
