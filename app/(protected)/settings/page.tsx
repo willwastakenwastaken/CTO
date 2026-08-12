@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { loginRedirectUrl } from "@/lib/auth/guards";
+import { mapAccountInfo, salesProfileStatus } from "@/lib/dashboard/settings";
 import { AccountSettingsForm } from "@/components/settings/account-settings-form";
 import {
   Card,
@@ -28,8 +29,14 @@ export default async function SettingsPage() {
     .eq("id", user.id)
     .maybeSingle();
 
-  const onboardingState = profile?.onboarding_state ?? null;
-  const onboardingComplete = onboardingState === "complete";
+  // Stored data only — missing values stay blank, never fictional.
+  const account = mapAccountInfo({
+    email: user.email,
+    displayName: profile?.display_name,
+    timezone: profile?.timezone,
+  });
+  const salesProfile = salesProfileStatus(profile?.onboarding_state ?? null);
+  const salesProfileComplete = salesProfile.status === "complete";
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10">
@@ -43,16 +50,48 @@ export default async function SettingsPage() {
           <CardHeader>
             <CardTitle>Account</CardTitle>
             <CardDescription>
-              Your display name appears in the sidebar. The timezone is used for
-              follow-up due dates.
+              Your sign-in email, display name, and timezone. The timezone is
+              used for follow-up due dates.
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="grid gap-6">
+            <dl className="grid gap-3 rounded-lg border bg-muted/20 p-4">
+              <div className="flex flex-col gap-0.5">
+                <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Email
+                </dt>
+                <dd className="text-sm">
+                  {account.email ?? (
+                    <span className="text-muted-foreground">Not set</span>
+                  )}
+                </dd>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Display name
+                </dt>
+                <dd className="text-sm">
+                  {account.displayName ?? (
+                    <span className="text-muted-foreground">Not set</span>
+                  )}
+                </dd>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Timezone
+                </dt>
+                <dd className="text-sm">
+                  {account.timezone ?? (
+                    <span className="text-muted-foreground">Not set</span>
+                  )}
+                </dd>
+              </div>
+            </dl>
             <AccountSettingsForm
               userId={user.id}
               initial={{
-                display_name: profile?.display_name ?? null,
-                timezone: profile?.timezone ?? null,
+                display_name: account.displayName,
+                timezone: account.timezone,
               }}
             />
           </CardContent>
@@ -61,30 +100,28 @@ export default async function SettingsPage() {
         <Card>
           <CardHeader>
             <CardTitle>Sales Profile</CardTitle>
-            <CardDescription>
-              {onboardingComplete
-                ? "Your Sales Profile is complete — edit it any time."
-                : "A Sales Profile unlocks live coaching. Complete it before starting a practice call."}
-            </CardDescription>
+            <CardDescription>{salesProfile.description}</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex items-center justify-between gap-4">
               <p className="text-sm">
                 <span
                   className={
-                    onboardingComplete
+                    salesProfileComplete
                       ? "text-emerald-600 dark:text-emerald-500"
                       : "text-amber-600 dark:text-amber-500"
                   }
                 >
-                  {onboardingComplete ? "Complete" : "Not started"}
+                  {salesProfile.label}
                 </span>
               </p>
               <Link
                 href="/settings/sales-profile"
                 className="inline-flex h-8 items-center justify-center rounded-lg border px-3 text-sm font-medium hover:bg-muted"
               >
-                {onboardingComplete ? "Edit sales profile" : "Complete sales profile"}
+                {salesProfileComplete
+                  ? "Edit sales profile"
+                  : "Complete sales profile"}
               </Link>
             </div>
           </CardContent>
