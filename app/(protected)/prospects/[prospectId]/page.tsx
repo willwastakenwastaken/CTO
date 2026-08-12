@@ -23,6 +23,7 @@ import { StageControl } from "@/components/prospects/stage-control";
 import { NextActionEditor } from "@/components/prospects/next-action-editor";
 import { NoteForm } from "@/components/prospects/note-form";
 import { DeleteProspectButton } from "@/components/prospects/delete-prospect-button";
+import { CallStrategyCard } from "@/components/prospects/call-strategy-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -183,6 +184,11 @@ export default async function ProspectDetailPage({
   const name = prospectDisplayName(prospect);
   const editing = (await searchParams).edit === "1";
 
+  // The pre-call brief (Call Strategy) is built server-side from stored data
+  // only; when the user has no Sales Profile it returns the onboarding-required
+  // state and the card links to /settings/sales-profile instead.
+  const strategy = await service.getCallStrategy(prospectId);
+
   const allowedNext = PIPELINE_TRANSITIONS[prospect.stage];
 
   if (editing) {
@@ -331,6 +337,9 @@ export default async function ProspectDetailPage({
               </p>
             </CardContent>
           </Card>
+
+          {/* Call Strategy — pre-call brief + Start AI-Assisted Call */}
+          <CallStrategyCard prospectId={prospectId} strategy={strategy} />
 
           {/* Next action */}
           <Card>
