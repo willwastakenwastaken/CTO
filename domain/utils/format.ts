@@ -29,3 +29,12 @@ export function toDurationSeconds(ms: number): number {
   const clamped = Number.isFinite(ms) && ms > 0 ? ms : 0;
   return Math.floor(clamped / 1000);
 }
+/** "contacted" -> "Contacted"; "ready_to_contact" -> "Ready to contact". */
+export function humanizeStage(stage: string | null | undefined): string {
+  if (!stage) return "—";
+  return stage
+    .split("_")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}

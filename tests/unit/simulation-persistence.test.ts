@@ -3,9 +3,13 @@ import { createSimulationService, type SimulationService } from "@/lib/calls/ser
 import type { CallStore } from "@/lib/calls/store";
 import { CallServiceError } from "@/lib/calls/types";
 import type {
+  ActivityRow,
   AiSuggestionRow,
   CallEventRow,
   CallSessionRow,
+  ProductEventRow,
+  ProspectNoteRow,
+  ProspectRow,
   TranscriptSegmentRow,
 } from "@/lib/calls/types";
 import { abcRoofingScenario } from "@/providers/simulation/abc-roofing";
@@ -16,9 +20,13 @@ import { T0 } from "./simulation-helpers";
  * ignoreDuplicates -> an existing id is a no-op) and records write order. */
 class FakeStore implements CallStore {
   sessions = new Map<string, CallSessionRow>();
+  prospects = new Map<string, ProspectRow>();
   segments: TranscriptSegmentRow[] = [];
   events: CallEventRow[] = [];
   suggestions: AiSuggestionRow[] = [];
+  notes: ProspectNoteRow[] = [];
+  activities: ActivityRow[] = [];
+  productEvents: ProductEventRow[] = [];
   writeLog: string[] = [];
 
   async getSession(callId: string) {
@@ -27,6 +35,15 @@ class FakeStore implements CallStore {
   async getProspect(prospectId: string | null) {
     if (!prospectId) return null;
     return { name: "Linked Prospect", company: "Linked Co" };
+  }
+  async getProspectRecord(prospectId: string) {
+    return this.prospects.get(prospectId) ?? null;
+  }
+  async updateProspect(prospectId: string, patch: { stage?: string; last_contact_at?: string | null }) {
+    this.writeLog.push("updateProspect");
+    const current = this.prospects.get(prospectId);
+    if (!current) throw new Error(`missing prospect ${prospectId}`);
+    this.prospects.set(prospectId, { ...current, ...patch });
   }
   async insertSession(row: CallSessionRow) {
     this.writeLog.push("insertSession");
@@ -78,6 +95,33 @@ class FakeStore implements CallStore {
     return this.suggestions
       .filter((s) => s.call_id === callId)
       .sort((a, b) => (a.created_at ?? "").localeCompare(b.created_at ?? ""));
+  }
+  async getNoteByCallAndType(callId: string, type: string) {
+    return this.notes.find((n) => n.call_id === callId && n.type === type) ?? null;
+  }
+  async upsertNote(row: ProspectNoteRow) {
+    this.writeLog.push("upsertNote");
+    const index = this.notes.findIndex((n) => n.id === row.id);
+    if (index >= 0) this.notes[index] = { ...this.notes[index], ...row };
+    else this.notes.push({ ...row });
+  }
+  async getActivityByCallAndType(callId: string, type: string) {
+    return this.activities.find((a) => a.call_id === callId && a.type === type) ?? null;
+  }
+  async upsertActivity(row: ActivityRow) {
+    this.writeLog.push("upsertActivity");
+    const index = this.activities.findIndex((a) => a.id === row.id);
+    if (index >= 0) this.activities[index] = { ...this.activities[index], ...row };
+    else this.activities.push({ ...row });
+  }
+  async getProductEventBySessionAndType(sessionId: string, type: string) {
+    return this.productEvents.find((e) => e.session_id === sessionId && e.type === type) ?? null;
+  }
+  async upsertProductEvent(row: ProductEventRow) {
+    this.writeLog.push("upsertProductEvent");
+    const index = this.productEvents.findIndex((e) => e.id === row.id);
+    if (index >= 0) this.productEvents[index] = { ...this.productEvents[index], ...row };
+    else this.productEvents.push({ ...row });
   }
 }
 
