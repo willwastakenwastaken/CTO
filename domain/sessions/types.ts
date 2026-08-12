@@ -1,20 +1,14 @@
-// Call session domain types — placeholder for the Phase 1 session engine.
+// Call session domain types.
 // IDs are UUID strings everywhere — never Number(id), parseInt(id), or
-// timestamps as record identity.
+// timestamps as record identity. Statuses MUST match
+// migrations/001_initial_schema.sql (public.call_status).
 
-export type CallSessionStatus =
-  | "prepared"
-  | "live"
-  | "processing"
-  | "completed"
-  | "cancelled"
-  | "failed";
-
-export interface CallSession {
-  id: string; // UUID string
-  status: CallSessionStatus;
-  // TODO(Phase 1): full schema — prospect, sales profile, mode, scenario,
-  // simulated flag, objective, timing, duration, outcome, both scores and
-  // explanations, summary, next action, pipeline recommendation/reason,
-  // conversation state, review payload, error.
-}
+export const SESSION_STATUSES = [
+  "prepared",
+  "live",
+  "processing",
+  "completed",
+  "cancelled",
+  "failed",
+] as const;
+export type CallSessionStatus = (typeof SESSION_STATUSES)[number];
