@@ -56,6 +56,9 @@ export interface StageChangeOutcome {
   toStage: string;
 }
 
+/** Where a stage change originated — recorded in the activity metadata. */
+export type StageChangeSource = "command_center" | "edit_form" | "pipeline_board";
+
 function iso(ms: number): string {
   return new Date(ms).toISOString();
 }
@@ -190,7 +193,7 @@ export function createProspectService({ store, userId }: ProspectServiceOptions)
     prospect: ProspectRow,
     fromStage: string,
     toStage: string,
-    source: "command_center" | "edit_form",
+    source: StageChangeSource,
     nowMs: number
   ): Promise<ActivityRow> {
     return {
@@ -306,12 +309,15 @@ export function createProspectService({ store, userId }: ProspectServiceOptions)
      * Command Center stage control. Rechecks the CURRENT stage against the
      * client's expectedStage (stale multi-tab guard), requires explicit
      * confirmation for terminal stages, and logs exactly one stage_changed
-     * activity per change with from/to metadata.
+     * activity per change with from/to metadata. `source` records where the
+     * move originated (default: the Command Center); the /pipeline board
+     * passes "pipeline_board" through the same path.
      */
     async changeStage(
       prospectId: string,
       input: unknown,
-      nowMs: number = Date.now()
+      nowMs: number = Date.now(),
+      source: StageChangeSource = "command_center"
     ): Promise<StageChangeOutcome> {
       const prospect = await loadProspect(prospectId);
       const values = stageChangeSchema.parse(input);
@@ -334,7 +340,7 @@ export function createProspectService({ store, userId }: ProspectServiceOptions)
           prospect,
           prospect.stage,
           transition.nextStage,
-          "command_center",
+          source,
           nowMs
         )
       );
