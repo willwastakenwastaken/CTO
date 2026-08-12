@@ -83,6 +83,56 @@ export interface AiSuggestionRow {
   created_at?: string | null;
 }
 
+/** A prospect row as the review/apply flow needs it (identity + stage). */
+export interface ProspectRow {
+  id: string;
+  user_id: string;
+  first_name: string | null;
+  last_name: string | null;
+  company: string | null;
+  stage: string;
+  last_contact_at: string | null;
+}
+
+/** prospect_notes row (Phase 1: the post-call structured call-summary note). */
+export interface ProspectNoteRow {
+  id: string;
+  user_id: string;
+  prospect_id: string;
+  call_id: string | null;
+  type: string;
+  title: string;
+  body: string | null;
+  structured_content: unknown;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+/** activities row (call_completed, stage_changed, ...). */
+export interface ActivityRow {
+  id: string;
+  user_id: string;
+  prospect_id: string | null;
+  call_id: string | null;
+  type: string;
+  summary: string;
+  metadata: unknown;
+  occurred_at: string;
+  created_at?: string | null;
+}
+
+/** product_events row (telemetry: review_created, review_applied, ...). */
+export interface ProductEventRow {
+  id: string;
+  user_id: string;
+  session_id: string | null;
+  type: string;
+  summary: string | null;
+  metadata: unknown;
+  occurred_at: string;
+  created_at?: string | null;
+}
+
 /** Stable error category for persistence failures (recoverable + safe). */
 export class PersistenceError extends Error {
   readonly category = "PERSISTENCE_FAILED" as const;

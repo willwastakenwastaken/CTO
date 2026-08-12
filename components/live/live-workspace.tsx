@@ -251,8 +251,14 @@ export function LiveWorkspace({ callId }: { callId: string }) {
     }
     setWorkspace(null);
     setAutoPlay(false);
-    setEnded({ kind: result.data.status === "cancelled" ? "cancelled" : "completed" });
-  }, [workspace, status, callId]);
+    // M7: a completed call routes straight to the review page, where the
+    // persisted review loads (finalize runs idempotently on load).
+    if (result.data.status === "completed") {
+      router.push(`/calls/${callId}/review`);
+      return;
+    }
+    setEnded({ kind: "cancelled" });
+  }, [workspace, status, callId, router]);
 
   const doRestart = useCallback(async () => {
     if (workspace === null) return;

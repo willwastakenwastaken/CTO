@@ -54,3 +54,13 @@ export const ReviewPayloadSchema = z.object({
 });
 
 export type ReviewPayload = z.infer<typeof ReviewPayloadSchema>;
+
+/**
+ * The persisted call_sessions.review_payload shape: the full review plus the
+ * prospect's pipeline stage at the moment the review was generated. Apply
+ * rechecks the prospect's CURRENT stage against this pre-call stage to reject
+ * stale pipeline updates (spec: NEVER silently move the pipeline).
+ */
+export interface StoredReviewPayload extends ReviewPayload {
+  preCallStage: string | null;
+}

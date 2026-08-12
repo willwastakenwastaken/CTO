@@ -35,16 +35,24 @@ import type {
   SimulationSuggestion,
 } from "@/domain/simulation/types";
 import { getScenario } from "@/providers/simulation/registry";
+import { uuidFromParts } from "@/domain/utils/uuid";
+import { humanizeStage } from "@/domain/utils/format";
 import type { CallStore } from "@/lib/calls/store";
-import { CallServiceError, PersistenceError } from "@/lib/calls/types";
+import { CallServiceError } from "@/lib/calls/types";
 import {
   buildWorkspace,
   type LiveWorkspace,
 } from "@/lib/calls/workspace";
+import { applyStageTransition } from "@/domain/pipeline/rules";
+import type { PipelineStage } from "@/domain/pipeline/types";
+import type { StoredReviewPayload } from "@/domain/schemas/review";
 import type {
+  ActivityRow,
   AiSuggestionRow,
   CallEventRow,
   CallSessionRow,
+  ProductEventRow,
+  ProspectNoteRow,
   TranscriptSegmentRow,
 } from "@/lib/calls/types";
 
@@ -69,6 +77,43 @@ export interface EndOutcome {
   review: ReviewPayload;
   snapshot: null;
 }
+
+/** Refusal reasons for finalizeReview (the review page renders these calmly). */
+export type FinalizeRefusal =
+  | { category: "NO_REVIEW"; message: string }
+  | { category: "INVALID_STATE"; message: string };
+
+export type FinalizeReviewOutcome =
+  | {
+      ok: true;
+      callId: string;
+      /** The persisted review payload (includes preCallStage). */
+      review: StoredReviewPayload;
+      /** True when this run generated + persisted the review. */
+      created: boolean;
+      durationSeconds: number | null;
+    }
+  | { ok: false; error: FinalizeRefusal };
+
+export type ApplyRecommendationOutcome =
+  | {
+      ok: true;
+      prospectId: string;
+      fromStage: string;
+      toStage: string;
+      /** False when the prospect was already at the recommended stage. */
+      applied: boolean;
+      /** True when this run actually changed the stage (false = no-op). */
+      changed: boolean;
+    }
+  | {
+      ok: false;
+      error:
+        | { category: "NO_REVIEW"; message: string }
+        | { category: "NO_PROSPECT"; message: string }
+        | { category: "STALE_STAGE"; message: string; currentStage: string; expectedStage: string }
+        | { category: "PIPELINE"; message: string };
+    };
 
 // ---------------------------------------------------------------------------
 // Row <-> domain mapping
@@ -290,6 +335,109 @@ function iso(ms: number): string {
   return new Date(ms).toISOString();
 }
 
+/** One call summary note per call (deterministic id -> idempotent upsert). */
+function buildCallSummaryNote(
+  callId: string,
+  row: CallSessionRow,
+  stored: StoredReviewPayload,
+  scenario: SimulationScenario
+): ProspectNoteRow {
+  return {
+    id: uuidFromParts(callId, "note", "call_summary"),
+    user_id: row.user_id,
+    prospect_id: row.prospect_id ?? "",
+    call_id: callId,
+    type: "call_summary",
+    title: `Call summary — ${scenario.prospectCompany} practice`,
+    body: stored.summary,
+    structured_content: {
+      situation: scenario.summary,
+      pain: stored.facts.pain,
+      impact: stored.facts.impact,
+      decisionProcess: stored.facts.decisionProcess,
+      timing: stored.facts.timing,
+      objections: stored.objections.map((o) => o.quote),
+      nextStep: stored.nextAction,
+      evidence: {
+        positives: stored.purchaseIntent.positives,
+        risks: stored.purchaseIntent.risks,
+        unknowns: stored.purchaseIntent.unknowns,
+        buyingSignals: stored.buyingSignals.map((b) => b.quote),
+      },
+      purchaseIntent: {
+        score: stored.purchaseIntent.score,
+        label: stored.purchaseIntent.label,
+        evidenceCompleteness: stored.purchaseIntent.evidenceCompleteness,
+        scoringVersion: stored.purchaseIntent.scoringVersion,
+      },
+      pipelineRecommendation: stored.pipelineRecommendation,
+    },
+  };
+}
+
+function buildCallCompletedActivity(
+  callId: string,
+  row: CallSessionRow,
+  stored: StoredReviewPayload,
+  nowMs: number
+): ActivityRow {
+  const target = stored.pipelineRecommendation.targetStage;
+  const summary = stored.preCallStage
+    ? `Practice call completed — ${humanizeStage(stored.preCallStage)} → ${humanizeStage(target)} recommended`
+    : `Practice call completed — ${humanizeStage(target)} recommended`;
+  return {
+    id: uuidFromParts(callId, "activity", "call_completed"),
+    user_id: row.user_id,
+    prospect_id: row.prospect_id,
+    call_id: callId,
+    type: "call_completed",
+    summary,
+    metadata: {
+      callId,
+      mode: "practice",
+      simulated: true,
+      outcome: stored.outcome,
+      durationSeconds: row.duration_seconds,
+      purchaseIntent: {
+        score: stored.purchaseIntent.score,
+        label: stored.purchaseIntent.label,
+        evidenceCompleteness: stored.purchaseIntent.evidenceCompleteness,
+      },
+      pipelineRecommendation: target,
+      preCallStage: stored.preCallStage,
+    },
+    occurred_at: iso(nowMs),
+  };
+}
+
+function buildReviewCreatedEvent(
+  callId: string,
+  row: CallSessionRow,
+  stored: StoredReviewPayload,
+  nowMs: number
+): ProductEventRow {
+  return {
+    id: uuidFromParts(callId, "product_event", "review_created"),
+    user_id: row.user_id,
+    session_id: callId,
+    type: "review_created",
+    summary: `Call review created — ${humanizeStage(stored.pipelineRecommendation.targetStage)} recommended.`,
+    metadata: {
+      callId,
+      recommendation: stored.pipelineRecommendation.targetStage,
+      pipelineReason: stored.pipelineRecommendation.reason,
+      preCallStage: stored.preCallStage,
+      outcome: stored.outcome,
+      purchaseIntent: {
+        score: stored.purchaseIntent.score,
+        label: stored.purchaseIntent.label,
+        evidenceCompleteness: stored.purchaseIntent.evidenceCompleteness,
+      },
+    },
+    occurred_at: iso(nowMs),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -333,6 +481,153 @@ export function createSimulationService({ store, userId }: SimulationServiceOpti
     }
     await store.updateSession(row.id, { conversation_state: toJson(plan.nextState) });
     return snapshotFor(sim.finishAdvance(inFlightSession, nowMs)) as LiveSessionSnapshot;
+  }
+
+  /**
+   * Creates the M7 lifecycle effects exactly once per call: one structured
+   * call-summary note, one call_completed activity, one review_created
+   * product event. Every row id is deterministic (uuidFromParts) so even a
+   * concurrent double-finalize cannot duplicate; re-running when rows exist
+   * is a read-only no-op (the review retry path must not re-write).
+   */
+  async function persistReviewEffects(
+    callId: string,
+    row: CallSessionRow,
+    stored: StoredReviewPayload,
+    scenario: SimulationScenario,
+    nowMs: number
+  ): Promise<void> {
+    if (row.prospect_id) {
+      const existingNote = await store.getNoteByCallAndType(callId, "call_summary");
+      if (!existingNote) {
+        await store.upsertNote(buildCallSummaryNote(callId, row, stored, scenario));
+      }
+    }
+    const existingActivity = await store.getActivityByCallAndType(callId, "call_completed");
+    if (!existingActivity) {
+      await store.upsertActivity(buildCallCompletedActivity(callId, row, stored, nowMs));
+    }
+    const existingEvent = await store.getProductEventBySessionAndType(callId, "review_created");
+    if (!existingEvent) {
+      await store.upsertProductEvent(buildReviewCreatedEvent(callId, row, stored, nowMs));
+    }
+  }
+
+  /** Loads the prospect stage at review time (the stage Apply would move from). */
+  async function capturePreCallStage(prospectId: string | null): Promise<string | null> {
+    if (!prospectId) return null;
+    const prospect = await store.getProspectRecord(prospectId);
+    if (!prospect || prospect.user_id !== userId) return null;
+    return prospect.stage;
+  }
+
+  /**
+   * Idempotent "finalize review" operation — the AFTER-the-call loop:
+   *   live -> processing -> completed, or processing -> completed (never
+   *   downgrades a completed call). Persists the evidence-based review onto
+   *   the session, then creates exactly one call-summary note, one
+   *   call_completed activity, and one review_created product event.
+   *   Re-running on a completed call re-fetches the saved payload without
+   *   regenerating or re-writing anything.
+   */
+  async function finalizeReviewCore(
+    callId: string,
+    nowMs: number
+  ): Promise<FinalizeReviewOutcome> {
+    const { row, segments, events, suggestions } = await loadCall(callId);
+    const scenario = getScenario(row.scenario);
+
+    if (row.status === "cancelled" || row.status === "failed") {
+      return {
+        ok: false,
+        error: {
+          category: "NO_REVIEW",
+          message: `No review is generated for a ${row.status} call — the transcript is kept, but there is nothing to review.`,
+        },
+      };
+    }
+    if (row.status === "prepared") {
+      return {
+        ok: false,
+        error: {
+          category: "INVALID_STATE",
+          message: "This call hasn't started yet — end it from the live workspace first.",
+        },
+      };
+    }
+
+    // Completed with a persisted review: re-fetch (never regenerate). The
+    // effects are ensured idempotently (no-op when they already exist).
+    if (row.status === "completed" && row.review_payload != null) {
+      const stored = row.review_payload as StoredReviewPayload;
+      await persistReviewEffects(callId, row, stored, scenario, nowMs);
+      return {
+        ok: true,
+        callId,
+        review: stored,
+        created: false,
+        durationSeconds: row.duration_seconds,
+      };
+    }
+
+    const startedAtMs = row.started_at ? Date.parse(row.started_at) : null;
+    const durationSeconds =
+      row.duration_seconds ??
+      (startedAtMs !== null ? Math.max(0, Math.floor((nowMs - startedAtMs) / 1000)) : null);
+
+    // Generate the review. A live session goes through the state machine
+    // (live -> processing -> completed); a processing session (End Session
+    // already ran) completes directly. Never downgrades a completed call.
+    let session = rebuildSession(row, segments, events, suggestions, scenario);
+    if (session.status === "live") {
+      const ended = sim.endSimulation(session, nowMs);
+      if (!ended.ok) mapEngineError(ended.error);
+      session = ended.value;
+      await store.updateSession(callId, { status: "processing", duration_seconds: durationSeconds });
+    }
+
+    const review = buildReview({
+      session,
+      scenario,
+      events: events.map(rowToEvent),
+      segments: segments.map((s) => ({
+        id: s.id,
+        callId: s.call_id,
+        sequence: s.sequence,
+        speaker: s.speaker,
+        text: s.text,
+        relativeTimeMs: s.relative_time_ms,
+        confidence: s.confidence,
+        isFinal: s.is_final,
+      })),
+      suggestions: toReviewSuggestions(suggestions),
+    });
+    const preCallStage = await capturePreCallStage(row.prospect_id);
+    const stored: StoredReviewPayload = { ...review, preCallStage };
+
+    await store.updateSession(callId, {
+      status: "completed",
+      outcome: review.outcome ?? null,
+      purchase_intent_score: review.purchaseIntent.score,
+      purchase_intent_label: review.purchaseIntent.label,
+      purchase_intent_explanation:
+        review.purchaseIntent.score === null
+          ? "Insufficient data — not enough revealed evidence."
+          : `${review.purchaseIntent.label} (${review.purchaseIntent.evidenceCompleteness} evidence completeness) — ${review.purchaseIntent.scoringVersion}`,
+      evidence: {
+        positives: review.purchaseIntent.positives,
+        risks: review.purchaseIntent.risks,
+        unknowns: review.purchaseIntent.unknowns,
+      },
+      summary: review.summary,
+      next_action: review.nextAction,
+      pipeline_recommendation: review.pipelineRecommendation.targetStage,
+      pipeline_recommendation_reason: review.pipelineRecommendation.reason,
+      review_payload: stored,
+      error: null,
+    });
+    await persistReviewEffects(callId, row, stored, scenario, nowMs);
+    return { ok: true, callId, review: stored, created: true, durationSeconds };
   }
 
   return {
@@ -479,65 +774,165 @@ export function createSimulationService({ store, userId }: SimulationServiceOpti
       return snapshotFor(result.value) as LiveSessionSnapshot;
     },
 
-    /** Ends the call: processing -> (generate review) -> completed. Idempotent. */
+    /**
+     * Ends the call: live -> (generate review) -> completed. Delegates to the
+     * M7 finalizeReview operation so every completion path (End Session from
+     * the live workspace, or the review page's own finalize) persists the
+     * identical review + note + activity + product event. Idempotent.
+     */
     async endCall(callId: string, nowMs: number = Date.now()): Promise<EndOutcome> {
-      const { row, segments, events, suggestions } = await loadCall(callId);
-      if (row.status === "completed") {
-        if (!row.review_payload) {
-          throw new PersistenceError("Call is completed but its review payload is missing.");
-        }
-        return { callId, review: row.review_payload as ReviewPayload, snapshot: null };
+      const result = await finalizeReviewCore(callId, nowMs);
+      if (!result.ok) {
+        throw new CallServiceError("INVALID_STATE", result.error.message);
       }
-      const scenario = getScenario(row.scenario);
-      const session = rebuildSession(row, segments, events, suggestions, scenario);
-      const ended = sim.endSimulation(session, nowMs);
-      if (!ended.ok) mapEngineError(ended.error);
-      const processing = ended.value;
-      await store.updateSession(callId, {
-        status: "processing",
-        duration_seconds:
-          processing.startedAtMs !== null
-            ? Math.max(0, Math.floor((nowMs - processing.startedAtMs) / 1000))
-            : 0,
+      return { callId, review: result.review, snapshot: null };
+    },
+
+    /**
+     * Finalize (or re-fetch) the evidence-based review for a call. Ownership-
+     * guarded (NOT_FOUND for another user's call), refuses cancelled/failed
+     * and prepared calls, never downgrades a completed call, and is safe to
+     * re-run: the review is regenerated at most once and the call-summary
+     * note / call_completed activity / review_created product event are each
+     * created exactly once.
+     */
+    async finalizeReview(callId: string, nowMs: number = Date.now()): Promise<FinalizeReviewOutcome> {
+      return finalizeReviewCore(callId, nowMs);
+    },
+
+    /**
+     * Applies the review's pipeline recommendation with a stale-stage recheck
+     * (spec: NEVER silently move the pipeline). The prospect's CURRENT stage
+     * is compared against the pre-call stage captured when the review was
+     * generated; when they differ, `confirmed: true` is required. Applying
+     * when the prospect is already at the recommended stage is a no-op.
+     * Creates exactly one stage_changed activity and one review_applied
+     * product event per apply.
+     */
+    async applyReviewRecommendation(
+      callId: string,
+      input: { confirmed?: boolean; nowMs?: number } = {}
+    ): Promise<ApplyRecommendationOutcome> {
+      const nowMs = input.nowMs ?? Date.now();
+      const { row } = await loadCall(callId); // throws NOT_FOUND when not owned
+      if (row.status !== "completed" || row.review_payload == null) {
+        return {
+          ok: false,
+          error: {
+            category: "NO_REVIEW",
+            message: "This call has no completed review to apply.",
+          },
+        };
+      }
+      const prospectId = row.prospect_id;
+      if (!prospectId) {
+        return {
+          ok: false,
+          error: {
+            category: "NO_PROSPECT",
+            message: "This practice call isn't linked to a prospect, so there's no pipeline record to update.",
+          },
+        };
+      }
+      const prospect = await store.getProspectRecord(prospectId);
+      if (!prospect || prospect.user_id !== userId) {
+        return {
+          ok: false,
+          error: {
+            category: "NO_PROSPECT",
+            message: "The linked prospect no longer exists.",
+          },
+        };
+      }
+      const payload = row.review_payload as StoredReviewPayload;
+      const targetStage = payload.pipelineRecommendation.targetStage;
+      // Legacy payloads (finalized before M7) have no preCallStage: skip the
+      // stale check by treating the current stage as expected.
+      const expectedStage = payload.preCallStage ?? prospect.stage;
+      const currentStage = prospect.stage;
+
+      // Idempotency: already at the recommended stage -> no-op (applying
+      // twice never duplicates activities or events).
+      if (currentStage === targetStage) {
+        return {
+          ok: true,
+          prospectId,
+          fromStage: currentStage,
+          toStage: targetStage,
+          applied: false,
+          changed: false,
+        };
+      }
+
+      // Stale-stage recheck: the prospect moved since the review was
+      // generated. Blocked until the user explicitly confirms.
+      if (currentStage !== expectedStage && input.confirmed !== true) {
+        return {
+          ok: false,
+          error: {
+            category: "STALE_STAGE",
+            message: `The prospect moved from ${humanizeStage(expectedStage)} to ${humanizeStage(currentStage)} since this call. Confirm to apply anyway.`,
+            currentStage,
+            expectedStage,
+          },
+        };
+      }
+
+      const transition = applyStageTransition({
+        prospectId,
+        currentStage: currentStage as PipelineStage,
+        expectedStage: currentStage as PipelineStage,
+        targetStage: targetStage as PipelineStage,
+        confirmed: true, // the caller already confirmed in the UI dialog
       });
-      const review = buildReview({
-        session: processing,
-        scenario,
-        events: events.map(rowToEvent),
-        segments: segments.map((s) => ({
-          id: s.id,
-          callId: s.call_id,
-          sequence: s.sequence,
-          speaker: s.speaker,
-          text: s.text,
-          relativeTimeMs: s.relative_time_ms,
-          confidence: s.confidence,
-          isFinal: s.is_final,
-        })),
-        suggestions: toReviewSuggestions(suggestions),
+      if (!transition.ok) {
+        return { ok: false, error: { category: "PIPELINE", message: transition.error.message } };
+      }
+
+      await store.updateProspect(prospectId, {
+        stage: targetStage,
+        last_contact_at: iso(nowMs),
       });
-      await store.updateSession(callId, {
-        status: "completed",
-        outcome: review.outcome,
-        purchase_intent_score: review.purchaseIntent.score,
-        purchase_intent_label: review.purchaseIntent.label,
-        purchase_intent_explanation:
-          review.purchaseIntent.score === null
-            ? "Insufficient data — not enough revealed evidence."
-            : `${review.purchaseIntent.label} (${review.purchaseIntent.evidenceCompleteness} evidence completeness) — ${review.purchaseIntent.scoringVersion}`,
-        evidence: {
-          positives: review.purchaseIntent.positives,
-          risks: review.purchaseIntent.risks,
-          unknowns: review.purchaseIntent.unknowns,
+      // Exactly one stage_changed activity per apply (deterministic id).
+      await store.upsertActivity({
+        id: uuidFromParts(callId, "activity", "stage_changed", targetStage),
+        user_id: userId,
+        prospect_id: prospectId,
+        call_id: callId,
+        type: "stage_changed",
+        summary: `Pipeline stage changed — ${humanizeStage(currentStage)} → ${humanizeStage(targetStage)} (from call review).`,
+        metadata: {
+          callId,
+          fromStage: currentStage,
+          toStage: targetStage,
+          source: "call_review",
+          recommendation: payload.pipelineRecommendation.reason,
         },
-        summary: review.summary,
-        next_action: review.nextAction,
-        pipeline_recommendation: review.pipelineRecommendation.targetStage,
-        pipeline_recommendation_reason: review.pipelineRecommendation.reason,
-        review_payload: review,
-        error: null,
+        occurred_at: iso(nowMs),
       });
-      return { callId, review, snapshot: null };
+      await store.upsertProductEvent({
+        id: uuidFromParts(callId, "product_event", "review_applied"),
+        user_id: userId,
+        session_id: callId,
+        type: "review_applied",
+        summary: `Applied call review recommendation: ${humanizeStage(currentStage)} → ${humanizeStage(targetStage)}.`,
+        metadata: {
+          callId,
+          prospectId,
+          fromStage: currentStage,
+          toStage: targetStage,
+          recommendation: targetStage,
+        },
+        occurred_at: iso(nowMs),
+      });
+      return {
+        ok: true,
+        prospectId,
+        fromStage: currentStage,
+        toStage: targetStage,
+        applied: true,
+        changed: true,
+      };
     },
 
     /** Cancels a prepared/live call (history is preserved). */
