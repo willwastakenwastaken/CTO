@@ -13,8 +13,15 @@ import type {
 } from "@/lib/calls/types";
 import { PersistenceError } from "@/lib/calls/types";
 
+export interface ProspectIdentity {
+  name: string | null;
+  company: string | null;
+}
+
 export interface CallStore {
   getSession(callId: string): Promise<CallSessionRow | null>;
+  /** Prospect display identity for a call header; null when not linked. */
+  getProspect(prospectId: string | null): Promise<ProspectIdentity | null>;
   insertSession(row: CallSessionRow): Promise<void>;
   updateSession(callId: string, patch: Partial<CallSessionRow>): Promise<void>;
   listSegments(callId: string): Promise<TranscriptSegmentRow[]>;
@@ -41,6 +48,17 @@ export function createSupabaseCallStore(supabase: SupabaseClient): CallStore {
         .maybeSingle();
       if (error) fail(`load call session ${callId}`, error);
       return (data as CallSessionRow | null) ?? null;
+    },
+
+    async getProspect(prospectId) {
+      if (!prospectId) return null;
+      const { data, error } = await supabase
+        .from("prospects")
+        .select("name, company")
+        .eq("id", prospectId)
+        .maybeSingle();
+      if (error) fail(`load prospect ${prospectId}`, error);
+      return (data as ProspectIdentity | null) ?? null;
     },
 
     async insertSession(row) {

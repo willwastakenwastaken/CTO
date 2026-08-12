@@ -37,6 +37,10 @@ import type {
 import { getScenario } from "@/providers/simulation/registry";
 import type { CallStore } from "@/lib/calls/store";
 import { CallServiceError, PersistenceError } from "@/lib/calls/types";
+import {
+  buildWorkspace,
+  type LiveWorkspace,
+} from "@/lib/calls/workspace";
 import type {
   AiSuggestionRow,
   CallEventRow,
@@ -619,6 +623,25 @@ export function createSimulationService({ store, userId }: SimulationServiceOpti
       const scenario = getScenario(row.scenario);
       const session = rebuildSession(row, segments, events, suggestions, scenario);
       return snapshotFor(session);
+    },
+
+    /** Full serializable payload the live workspace renders (header, hero,
+     * transcript, deal state, signals, controls). Built from the same
+     * authoritative rows the snapshot reconciles against. */
+    async getWorkspace(callId: string): Promise<LiveWorkspace> {
+      const { row, segments, events, suggestions } = await loadCall(callId);
+      const scenario = getScenario(row.scenario);
+      const session = rebuildSession(row, segments, events, suggestions, scenario);
+      const prospect = row.prospect_id ? await store.getProspect(row.prospect_id) : null;
+      return buildWorkspace({
+        row,
+        segments,
+        events,
+        suggestions,
+        session,
+        scenario,
+        prospect,
+      });
     },
 
     /** Snapshot -> authoritative reconcile (authoritative wins; cleared when
